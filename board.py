@@ -19,12 +19,15 @@ class Board:
 		self.puzzle     = puzzle
 		# a correct puzzle should have numbers in each 
 		# row, column, and box should sum up to this number
-		self.truth      = np.sum(range(1, self.N+1))
+		self.truth = np.sum(range(1, self.N+1))
 		# sequence of puzzle steps to enable reverting 
 		# back to a previously stable state
-		self.changes    = []
-		self.changes:"list[tuple[int,int,list[int]]]"
+		self.changes:"list[tuple[int,int,int]]" = []
 		self.checkpoint = 0
+		# candidate cache
+		self.cand:"dict['tuple[int,int]':'list[int]']" = {}
+		# indirect rules for infering extra invalidations on slots in puzzle
+		self.indirects:"dict['tuple[int,int]':'list[int]']" = {}
 
 	def setCheckpoint(self:"Board") -> int:
 		"""
@@ -43,7 +46,13 @@ class Board:
 		self.changes = self.changes[:k]
 		for x, y, _ in revert:
 			self.puzzle[x,y] = 0
+		self.clearCache()
 		return self.setCheckpoint()
+	
+	def clearCache(self:"Board") -> None:
+		""" Empty board caching. """
+		self.cand:"dict['tuple[int,int]':'list[int]']" = {}
+		self.indirects:"dict['tuple[int,int]':'list[int]']" = {}
 
 	def validate(self:"Board") -> bool:
 		""" 
@@ -68,18 +77,24 @@ class Board:
 		# but now atleast sure it is correct
 		return True
 	
-	def candidates(self:"Board")-> "list[tuple[int,int,list[int]]]":
+	def candidates(self:"Board") -> "dict['tuple[int,int]':'list[int]']":
 		"""
-		Return list of (x,y,[n...]) where x,y are indices into puzzle that can hold values n...
+		Return map of x,y to [n...] where x,y are indices into puzzle that can hold values n...
 		"""
-		C = []
-		for x in range(self.N):
-			for y in range(self.N):
-				# skip slots with candidates
-				if self.puzzle[x,y] != 0:
-					continue
-				c = self._candidates(x,y)
-				C.append( (x,y,c) )
+		if len(self.cand) != 0:
+			return self.cand
+		C = {}
+		for x,y in np.ndindex(self.N, self.N):
+			# skip slots with candidates
+			if self.puzzle[x,y] != 0:
+				continue
+			c = self._candidates(x,y)
+			# no candidates for 0-slot means puzzle has become wrong
+			assert len(c) > 0
+			C[x,y] = c
+		self.cand = C
+		if len(self.indirects) != 0:
+			self.indirects = self.findIndirects()
 		return C
 	
 	def _candidates(self:"Board", x:int, y:int) -> "list[int]":
@@ -93,7 +108,7 @@ class Board:
 
 	def validCandidate(self:"Board", x:int, y:int, n:int) -> bool:
 		""" Return true if n is a sufficient candidate to put into (x,y). """
-		if n in self.row(x) or n in self.column(y) or n in self.box(x,y):
+		if n in self.row(x) or n in self.column(y) or n in self.box(x,y) or self.isExluded(n,x,y):
 			return False
 		return True
 
@@ -107,9 +122,94 @@ class Board:
 
 	def box(self:"Board", x:int, y:int) -> np.ndarray:
 		""" Return box related to coordinates (x,y). """
+		x, y = self.boxCoordinate(x,y)
+		return self.puzzle[x:x+self.boxLen, y:y+self.boxLen]
+	
+	def boxCoordinate(self:"Board", x:int, y:int) -> "tuple[int,int]":
+		""" Return argument coordinates bounded to their respective puzzle box top-left coordinates. """
 		x -= x % self.boxLen
 		y -= y % self.boxLen
-		return self.puzzle[x:x+self.boxLen, y:y+self.boxLen]
+		return x, y
+
+	def isExluded(self:"Board", n:int, x:int, y:int) -> bool:
+		""" Return true if n cannot be in (x,y) due to indirect exclusion. """
+		for (i,j),excl in self.indirects.items():
+			# find candidate exclusions for (x,y)
+			if (i,j) != (x,y):
+				continue
+			elif n in excl:
+				return True
+		return False
+
+	def FindExclusions(self:"Board") -> "dict['tuple[int,int]':'list[int]']":
+		"""
+		Return map of x,y to [n...] where x,y are coordinates in puzzle that cannot hold values n...
+		"""
+		assert len(self.cand) > 0
+		excl = {}
+		for (x,y),cand in self.cand.items():
+			i,j = self.boxCoordinate(x, y)
+			for n in cand:
+				row = self.row(x)[:j][j+self.boxLen:]
+		return excl
+
+	def findIndirects(self:"Board") -> "dict['tuple[int,int]':'list[int]']":
+		"""
+		Return list of (x,y,[n...]) where (x,y) are coordinates in puzzle that cannot hold values n...
+		"""
+		assert len(self.cand) >= 0
+		indirects = []
+		return indirects
+		for x,y,c in self.cand:
+			c = self._findIndirects(x,y,c)
+			indirects.append( (x,y,c) )
+		self.indirects = indirects
+		return indirects
+
+	def _findIndirects(self:"Board", x:int, y:int, cand:"list[int]") -> "list[int]":
+		"""
+		Return exclusive list of candidates that cannot be at (x,y).
+		"""
+		excl = []
+
+		i, j = self.boxCoordinate(x, y)
+		for n in cand:
+			self.horizontalExclusion(n, x,)
+			if n in self.row(x)[:j][j+self.boxLen:]:
+				pass
+
+		boxes = self.mapCoordinatesToBox( (x,y) )
+		# find horizontal and vertical set of coordinates 
+		# in boxes of (i,j) where candidates align
+		for v in boxes.values():
+			box, coordinates = v
+			for i in range(self.boxLen):
+				# horizontal
+				if 0 in box[i,:]:
+					pass
+				# vertical
+				if 0 in box[:,i]:
+					pass
+		return excl
+	
+	def mapCoordinatesToBox(self:"Board", xy:"tuple[int,int]") -> "dict[np.ndarray,list[tuple[int,int]]]":
+		""" Return dictionary mapping candidate coordinates to puzzle box, excluding (x,y). """
+		boxes = {}
+		for i,j,_ in self.cand:
+			ij = self.boxCoordinate(i,j)
+			# indirect exclusion comes from outside box of (x,y)
+			if self.isSameBox(xy, ij):
+				continue
+			if ij not in boxes:
+				boxes[ij] = self.box(*ij), [ (i,j) ]
+			else:
+				boxes[ij][1].append( (i,j) )
+		return boxes
+
+	def isSameBox(self:"Board", xy:"tuple[int,int]", ij:"tuple[int,int]") -> bool:
+		""" Return true if arrgument coordinates belong to the same puzzle box. """
+		xy, ij = self.boxCoordinate(*xy), self.boxCoordinate(*ij)
+		return xy == ij
 
 	def setSlot(self:"Board", x:int, y:int, n:int) -> bool:
 		"""
@@ -120,6 +220,7 @@ class Board:
 			return False
 		self.changes.append( (x,y,n) )
 		self.puzzle[x,y] = n
+		self.clearCache()
 		return True
 
 	def Q(self:"Board") -> float:

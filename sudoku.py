@@ -10,39 +10,59 @@ class Sudoku:
 	def __init__(self:"Sudoku", puzzle:np.ndarray, trackQscore:bool=False) -> None:
 		self.board = Board(puzzle)
 		self.Q = trackQscore
+		self.checkpoints = []
+		self.steps = 0
 	
 	def solve(self:"Sudoku", maxSteps:int) -> Board:
 		""" Return solved board sudoku puzzle board. """
-		checkpoint = 0
 		Q = np.zero( (maxSteps,) ) if self.Q else None
-		for epoch in range(maxSteps):
-			# checkpoint every now and then
-			if epoch % self.board.N**2 == 0:
-				checkpoint = self.board.setCheckpoint()
-			# single solution slots first
-			cand, ok = self.setObviousCandidates()
-			# wrong steps can occur between checkpoints
-			# since subsequent random selections lack global view of board
-			if not ok:
-				checkpoint = self.board.resetCheckpoint(checkpoint)
+		# for epoch in range(maxSteps):
+		while self.steps < maxSteps:
+			self.checkpoint()
+			try: ok = self.step() 
+			except AssertionError as e:
+				print(f"rolling back: {e}")
+				self.rollback()
 				continue
-			elif len(cand) == 0:
-				break # no candidates -> full board
-			# just pick one
-			x, y, n, ok = self.random(cand)
-			if not ok:
-				checkpoint = self.board.resetCheckpoint(checkpoint)
-				continue
-			ok = self.board.setSlot(x, y, n)
-			if not ok:
-				checkpoint = self.board.resetCheckpoint(checkpoint)
-				continue
-			if Q:
-				Q[epoch] = self.board.Q()
-		if Q:
-			self.Q = Q[:epoch+1]
+			
+			if ok is True:
+				break
+			if Q is not None:
+				Q[self.steps] = self.board.Q()
+
+			self.steps += 1
+
+		if Q is not None:
+			self.Q = Q[:self.steps+1]
 		return self.board
 	
+	def checkpoint(self:"Sudoku") -> None:
+		""" Record board checkpoint. """
+		self.checkpoints.append(self.board.setCheckpoint())
+
+	def step(self:"Sudoku") -> bool:
+		"""
+		Do one puzzle step.
+		Raise assertion on error.
+		Return true if puzzle is done.
+		"""
+		# single solution slots first
+		cand, ok = self.setObviousCandidates()
+		assert ok
+		if len(cand) == 0:
+			return True # no candidates -> full board
+		# wrong steps can occur between checkpoints
+		# since subsequent random selections lack global view of board
+		ok = self.setRandom(cand)
+		assert ok
+		# not done yet
+		return False
+
+	def rollback(self:"Sudoku") -> None:
+		""" Revert to previous board checkpoint. """
+		k = self.checkpoints.pop(-1)
+		self.board.resetCheckpoint(k)
+
 	def setObviousCandidates(self:"Sudoku") -> "tuple[list[tuple[int,int,list[int]]],bool]":
 		"""
 		Find and set candidates with only one possibility. 
@@ -52,7 +72,7 @@ class Sudoku:
 		ok = True
 		updated = False
 		C = self.board.candidates()
-		for x, y, c in C:
+		for (x,y), c in C.items():
 			# skip non-deterministic suggestions
 			if len(c) != 1:
 				continue
@@ -66,8 +86,11 @@ class Sudoku:
 			C, ok = self.setObviousCandidates()
 		return C, ok
 
-	def random(self:"Sudoku", cand:"list[tuple[int,int,list[int]]]") -> "tuple[int,int,int]":
-		""" Return a random puzzle coordinate and candidate. """
+	def setRandom(self:"Sudoku", cand:"list[tuple[int,int,list[int]]]") -> bool:
+		"""
+		Set a random puzzle coordinate and candidate. 
+		Return false on error. 
+		"""
 		ok = True
 		i = np.random.randint(0, len(cand))
 		x, y, c = cand[i]
@@ -75,7 +98,8 @@ class Sudoku:
 			return 0, 0, 0, not ok
 		i = np.random.randint(0, len(c))
 		n = c[i]
-		return x, y, n, ok
+		ok = self.board.setSlot(x, y, n)
+		return ok
 
 	def Qscores(self:"Sudoku") -> np.ndarray:
 		"""
