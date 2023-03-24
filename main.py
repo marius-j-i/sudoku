@@ -8,8 +8,8 @@ from   time import time
 
 def main(argv:"list[str]") -> None:
 	""" Consume sudoku class. """
-	if len(argv) < 2:
-		usage = f"python {os.path.basename(__file__)} <puzzle-path> "
+	if len(argv) < 2 or "-h" in argv or "--help" in argv:
+		usage = f"python {os.path.basename(__file__)} <puzzle-path> [--Q-score] [--steps <int>] "
 		exit(usage)
 	# arguments
 	filename = argv[1]

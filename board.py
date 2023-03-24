@@ -27,7 +27,7 @@ class Board:
 		# candidate cache
 		self.cand:"dict['tuple[int,int]':'list[int]']" = {}
 		# indirect rules for infering extra invalidations on slots in puzzle
-		self.indirects:"dict['tuple[int,int]':'list[int]']" = {}
+		self.excl:"dict['tuple[int,int]':'list[int]']" = {}
 
 	def setCheckpoint(self:"Board") -> int:
 		"""
@@ -52,7 +52,7 @@ class Board:
 	def clearCache(self:"Board") -> None:
 		""" Empty board caching. """
 		self.cand:"dict['tuple[int,int]':'list[int]']" = {}
-		self.indirects:"dict['tuple[int,int]':'list[int]']" = {}
+		self.excl:"dict['tuple[int,int]':'list[int]']" = {}
 
 	def validate(self:"Board") -> bool:
 		""" 
@@ -81,8 +81,6 @@ class Board:
 		"""
 		Return map of x,y to [n...] where x,y are indices into puzzle that can hold values n...
 		"""
-		if len(self.cand) != 0:
-			return self.cand
 		C = {}
 		for x,y in np.ndindex(self.N, self.N):
 			# skip slots with candidates
@@ -90,11 +88,13 @@ class Board:
 				continue
 			c = self._candidates(x,y)
 			# no candidates for 0-slot means puzzle has become wrong
-			assert len(c) > 0
+			# assert len(c) > 0
 			C[x,y] = c
 		self.cand = C
-		if len(self.indirects) != 0:
-			self.indirects = self.findIndirects()
+		if len(self.excl) == 0:
+			self.excl = self.exclusions()
+			if len(self.excl) != 0: # redo candidates with exclusions
+				C = self.candidates()
 		return C
 	
 	def _candidates(self:"Board", x:int, y:int) -> "list[int]":
@@ -120,10 +120,33 @@ class Board:
 		""" Return column for coordinate y. """
 		return self.puzzle[:,y]
 
+	def isExluded(self:"Board", n:int, x:int, y:int) -> bool:
+		""" Return true if n cannot be in (x,y) due to indirect exclusion. """
+		return (x,y) in self.excl.keys() and n in self.excl[x,y]
+
 	def box(self:"Board", x:int, y:int) -> np.ndarray:
 		""" Return box related to coordinates (x,y). """
 		x, y = self.boxCoordinate(x,y)
 		return self.puzzle[x:x+self.boxLen, y:y+self.boxLen]
+	
+	def boxRow(self, x:int) -> np.ndarray:
+		""" Return boxes along row coordinate x. """
+		x,_ = self.boxCoordinate(x,0)
+		return self.puzzle[x:x+self.boxLen,:]
+	
+	def boxColumn(self, y:int) -> np.ndarray:
+		""" Return boxes along column coordinate y. """
+		_,y = self.boxCoordinate(0,y)
+		return self.puzzle[:,y:y+self.boxLen]
+	
+	def withoutBox(self, boxes:np.ndarray, x:int=-1, y:int=-1) -> np.ndarray:
+		""" Return argument boxes excluding x or y box. """
+		if x >= 0: # boxes are columnwise
+			return np.vstack( (boxes[:x,:], boxes[x+self.boxLen:,:]) )
+		if y >= 0:
+			return np.hstack( (boxes[:,:y], boxes[y+self.boxLen:,:]) )
+		# one must be negative (unspecified)
+		assert x < 0 or y < 0
 	
 	def boxCoordinate(self:"Board", x:int, y:int) -> "tuple[int,int]":
 		""" Return argument coordinates bounded to their respective puzzle box top-left coordinates. """
@@ -131,86 +154,66 @@ class Board:
 		y -= y % self.boxLen
 		return x, y
 
-	def isExluded(self:"Board", n:int, x:int, y:int) -> bool:
-		""" Return true if n cannot be in (x,y) due to indirect exclusion. """
-		for (i,j),excl in self.indirects.items():
-			# find candidate exclusions for (x,y)
-			if (i,j) != (x,y):
-				continue
-			elif n in excl:
-				return True
-		return False
-
-	def FindExclusions(self:"Board") -> "dict['tuple[int,int]':'list[int]']":
+	def exclusions(self:"Board") -> "dict['tuple[int,int]':'list[int]']":
 		"""
 		Return map of x,y to [n...] where x,y are coordinates in puzzle that cannot hold values n...
 		"""
 		assert len(self.cand) > 0
 		excl = {}
 		for (x,y),cand in self.cand.items():
-			i,j = self.boxCoordinate(x, y)
 			for n in cand:
-				row = self.row(x)[:j][j+self.boxLen:]
-		return excl
-
-	def findIndirects(self:"Board") -> "dict['tuple[int,int]':'list[int]']":
-		"""
-		Return list of (x,y,[n...]) where (x,y) are coordinates in puzzle that cannot hold values n...
-		"""
-		assert len(self.cand) >= 0
-		indirects = []
-		return indirects
-		for x,y,c in self.cand:
-			c = self._findIndirects(x,y,c)
-			indirects.append( (x,y,c) )
-		self.indirects = indirects
-		return indirects
-
-	def _findIndirects(self:"Board", x:int, y:int, cand:"list[int]") -> "list[int]":
-		"""
-		Return exclusive list of candidates that cannot be at (x,y).
-		"""
-		excl = []
-
-		i, j = self.boxCoordinate(x, y)
-		for n in cand:
-			self.horizontalExclusion(n, x,)
-			if n in self.row(x)[:j][j+self.boxLen:]:
-				pass
-
-		boxes = self.mapCoordinatesToBox( (x,y) )
-		# find horizontal and vertical set of coordinates 
-		# in boxes of (i,j) where candidates align
-		for v in boxes.values():
-			box, coordinates = v
-			for i in range(self.boxLen):
-				# horizontal
-				if 0 in box[i,:]:
-					pass
-				# vertical
-				if 0 in box[:,i]:
-					pass
+				if not self.exclude(x,y,n):
+					continue
+				if (x,y) not in excl.keys():
+					excl[x,y] = [ n ]
+				else:
+					excl[x,y].append(n)
 		return excl
 	
-	def mapCoordinatesToBox(self:"Board", xy:"tuple[int,int]") -> "dict[np.ndarray,list[tuple[int,int]]]":
-		""" Return dictionary mapping candidate coordinates to puzzle box, excluding (x,y). """
-		boxes = {}
-		for i,j,_ in self.cand:
-			ij = self.boxCoordinate(i,j)
-			# indirect exclusion comes from outside box of (x,y)
-			if self.isSameBox(xy, ij):
+	def exclude(self, x:int, y:int, n:int) -> bool:
+		"""
+		Return true if n is not able to be at x,y due to indirect reference.
+		"""
+		return self.excludeByRow(x,y,n) and self.excludeByColumn(x,y,n)
+
+	def excludeByRow(self, x:int, y:int, n:int) -> bool:
+		"""
+		Return true if n is not able to be in box-row x because of indirect inference.
+		"""
+		boxes = self.boxRow(x)
+		# list of row-indices where n appears
+		nAppearsIn = -1
+		for i,j in np.ndindex(boxes.shape):
+			if y < j < y+self.boxLen:
 				continue
-			if ij not in boxes:
-				boxes[ij] = self.box(*ij), [ (i,j) ]
-			else:
-				boxes[ij][1].append( (i,j) )
-		return boxes
-
-	def isSameBox(self:"Board", xy:"tuple[int,int]", ij:"tuple[int,int]") -> bool:
-		""" Return true if arrgument coordinates belong to the same puzzle box. """
-		xy, ij = self.boxCoordinate(*xy), self.boxCoordinate(*ij)
-		return xy == ij
-
+			i += x
+			if (i,j) in self.cand.keys() and n in self.cand[i,j]:
+				if nAppearsIn < 0:
+					nAppearsIn = i
+				elif nAppearsIn != i:
+					return False # no row-indirect if n can be in more than one row-index
+		excluding = nAppearsIn == x
+		return excluding
+	
+	def excludeByColumn(self, x:int, y:int, n:int) -> bool:
+		"""
+		Return true if n is not able to be in box-column y because of indirect inference.
+		"""
+		boxes = self.boxColumn(y)
+		# list of column-indices where n appears
+		nAppearsIn = -1
+		for i,j in np.ndindex(boxes.shape):
+			if i < x < i+self.boxLen:
+				continue
+			j += y
+			if (i,j) in self.cand.keys() and n in self.cand[i,j]:
+				if nAppearsIn < 0:
+					nAppearsIn = j
+				elif nAppearsIn != j:
+					return False # no column-indirect if n can be in more than one column-index
+		excluding = nAppearsIn == y
+		return excluding
+	
 	def setSlot(self:"Board", x:int, y:int, n:int) -> bool:
 		"""
 		Set n as element in (x,y) position of puzzle and assert operation is valid. 
