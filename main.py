@@ -1,67 +1,51 @@
+#!/usr/bin/env python3.10
+"""
+usage:
+	--path  <str> : path to .csv-file puzzle
+	--q-score     : boolean flag to plot Q-score
+	--steps <int> : maximum number of steps for solver to try
+"""
 
+import argparse
 from   matplotlib import pyplot as plt
 import numpy as np
-import os
 from   sys import argv
 from   sudoku import Sudoku
 from   time import time
 
-def main(argv:"list[str]") -> None:
+def main(argv:list[str]) -> None:
 	""" Consume sudoku class. """
-	if len(argv) < 2 or "-h" in argv or "--help" in argv:
-		usage = f"python {os.path.basename(__file__)} <puzzle-path> [--Q-score] [--steps <int>] "
-		exit(usage)
-	# arguments
-	filename = argv[1]
-	Qscore = "--Q-score" in argv
-	maxSteps = 16384
-	if "--steps" in argv:
-		maxSteps = nextarg("--steps", argv, int)
+	args = flags(argv)
 	# sudoku instance
-	puzzle = loadPuzzle(filename)
-	sudoku = Sudoku(puzzle)
+	puzzle = loadPuzzle(args.filename)
+	sudoku = Sudoku(puzzle, args.score)
 	t = time()
-	board  = sudoku.solve(maxSteps)
+	board  = sudoku.solve(args.steps)
 	t = time() - t
-	# output
-	if not board.validate():
-		print(f"solution is incorrect!")
-	else:
+	if board.validate():
 		print(f"solution is correct!")
-	print(f"puzzle took {t} sec.")
+	else:
+		print(f"solution is incorrect!")
+	print(f"solution took {t} sec.")
 	print(board)
-	if Qscore:
+	if args.score:
 		Q = sudoku.Qscores()
 		plt.plot(Q, "-x")
 		plt.xlabel("Steps")
 		plt.ylabel("$\mathcal{Q}(x)$")
 		plt.show()
 
+def flags(argv:list[str]) -> argparse.Namespace:
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--filename", type = str, required = True, help = "path to .csv-file puzzle")
+	parser.add_argument("--steps", type = int, default = 16384, help = "maximum number of steps for solver to try")
+	parser.add_argument("--score", action = "store_true", default = False, help = "boolean flag to plot Q-score")
+	args = parser.parse_args(argv)
+	return args
+
 def loadPuzzle(filename:str) -> np.ndarray:
 	""" Return array of puzzle from .csv-file. """
 	return np.genfromtxt(filename, dtype = np.int_, delimiter = ",", comments = "#")
 
-def nextarg(arg:str, argv:list, callback:callable=None) -> str:
-	"""Return argument after arg in argv with a dtype of callback if given."""
-	if arg not in argv:
-		if callback is not None:
-			errmsg = f"{arg} flag requires positional argument {callback.__name__}"
-			exit(errmsg)
-		return None
-
-	i = argv.index(arg) + 1
-
-	if len(argv) == i or argv[i].startswith("--"):
-		if callback is None:
-			return None
-		errmsg = f"{arg} flag requires positional argument {callback.__name__}"
-		exit(errmsg)
-	
-	arg = argv[i]
-	if callback is None:
-		callback = str
-
-	return callback(arg)
-
 if __name__ == "__main__":
-	main(argv)
+	main(argv[1:])
